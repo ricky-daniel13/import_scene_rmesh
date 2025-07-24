@@ -157,7 +157,18 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
             mesh_parent.parent = obj_parent
 
         for submesh in range(rmesh.mesh_count):
-            mat_name = rmesh.submeshes[submesh].texture.texture_name.value.split(".")[0]
+            lm_texture = rmesh.submeshes[submesh].lightmap
+            dif_texture = rmesh.submeshes[submesh].texture
+
+            has_lm  = self.use_lightmaps and lm_texture.mat_type == room_mesh.RoomMesh.TextureType.lightmap
+            if self.use_ue:
+                has_lm = self.use_lightmaps and lm_texture.mat_type != room_mesh.RoomMesh.TextureType.none
+
+
+            diffuse_name = Path(dif_texture.texture_name.value).stem
+            lightmap_name = f"_{Path(lm_texture.texture_name.value).stem}" if has_lm else ""
+            mat_name = f"{diffuse_name}{lightmap_name}"
+
             mesh = bpy.data.meshes.new("sm" + str(submesh) + "_" + mat_name)
             bm = bmesh.new()
 
