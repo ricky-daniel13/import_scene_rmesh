@@ -32,12 +32,11 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
     bl_options = {'UNDO'}
 
     # Add import options as properties
-    #use_prevent_faces: bpy.props.BoolProperty(name="Prevent duplicated faces", default=True)
+
     use_imp_mats: bpy.props.BoolProperty(name="Import Materials", default=True)
     use_ents: bpy.props.BoolProperty(name="Import Entities as empties", default=True)
-    #use_option2: bpy.props.BoolProperty(name="Option 2", default=False)
-    #float_option: bpy.props.FloatProperty(name="Float Option", default=0.0, min=0.0, max=1.0)
-
+    use_lightmaps: bpy.props.BoolProperty(name="Import Lightmaps", default=True)
+    use_ue: bpy.props.BoolProperty(name="Ultimate Edition Compatibility", default=True)
 
     filename_ext = ".rmesh"
     filter_glob: bpy.props.StringProperty(default="*.rmesh", options={'HIDDEN'})
@@ -56,15 +55,18 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
         #Creating mats first
         if (self.use_imp_mats):
             for submesh in range(rmesh.mesh_count):
-                tex0 = rmesh.submeshes[submesh].textures[0]
-                tex1 = rmesh.submeshes[submesh].textures[1]
+                lm_texture = rmesh.submeshes[submesh].lightmap
+                dif_texture = rmesh.submeshes[submesh].texture
 
-                print(f"Texture type [0] {tex0.mat_type}, Texture type [1] {tex1.mat_type}")
-                print(f"Diffuse texture: {tex1.texture_name.value}, Lightmap texture: {tex0.texture_name.value if tex0.mat_type == room_mesh.RoomMesh.TextureType.lightmap else 'None'}")
+                has_lm  = self.use_lightmaps and lm_texture.mat_type == room_mesh.RoomMesh.TextureType.lightmap
+                if self.use_ue:
+                    has_lm = self.use_lightmaps and lm_texture.mat_type != room_mesh.RoomMesh.TextureType.none
 
+                print(f"Texture Slot 0 Type {lm_texture.mat_type}, Texture Slot 1 Type {dif_texture.mat_type}")
+                print(f"Diffuse texture: {dif_texture.texture_name.value}, Lightmap texture: {lm_texture.texture_name.value if has_lm or lm_texture.mat_type == room_mesh.RoomMesh.TextureType.lightmap else 'None'}")
 
-                diffuse_name = Path(tex1.texture_name.value).stem
-                lightmap_name = f"_{Path(tex0.texture_name.value).stem}" if tex0.mat_type.name == room_mesh.RoomMesh.TextureType.lightmap else ""
+                diffuse_name = Path(dif_texture.texture_name.value).stem
+                lightmap_name = f"_{Path(lm_texture.texture_name.value).stem}" if has_lm else ""
                 mat_name = f"{diffuse_name}{lightmap_name}"
 
                 if mat_name not in mats:
@@ -82,8 +84,17 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
                     tex_image_diffuse.location = (-600, 300)
 
                     try:
-                        diffuse_path = os.path.join(Path(filepath).parent, tex1.texture_name.value)
-                        tex_image_diffuse.image = bpy.data.images.load(diffuse_path)
+                        base_path = Path(filepath).parent
+                        diffuse_path = os.path.join(base_path, dif_texture.texture_name.value)
+                        fallback_path = os.path.join(base_path, 'textures', dif_texture.texture_name.value)
+                        if os.path.exists(diffuse_path):
+                            tex_image_diffuse.image = bpy.data.images.load(diffuse_path)
+                        elif self.use_ue and os.path.exists(fallback_path):
+                            print(f"Found texture in UE textures folder: {fallback_path}")
+                            tex_image_diffuse.image = bpy.data.images.load(fallback_path)
+                        else:
+                            raise FileNotFoundError(f"Could not find texture: {dif_texture.texture_name.value}")
+                    
                     except:
                         print(f"Could not load diffuse texture: {diffuse_path}")
 
@@ -102,18 +113,16 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
                     links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
                     bsdf.inputs["Base Color"].default_value = (0.0, 0.0, 0.0, 1.0)
 
-                    # Emission strength
-                    bsdf.inputs["Emission Strength"].default_value = 10.0
-
-                    if tex0.mat_type == room_mesh.RoomMesh.TextureType.lightmap:
+                    if has_lm:
                         # Load and connect lightmap
+                        bsdf.inputs["Emission Strength"].default_value = 10.0
                         tex_image_lightmap = nodes.new(type="ShaderNodeTexImage")
                         tex_image_lightmap.label = "Lightmap"
                         tex_image_lightmap.name = "LightmapTexture"
                         tex_image_lightmap.location = (-600, 0)
 
                         try:
-                            lightmap_path = os.path.join(Path(filepath).parent, tex0.texture_name.value)
+                            lightmap_path = os.path.join(Path(filepath).parent, lm_texture.texture_name.value)
                             tex_image_lightmap.image = bpy.data.images.load(lightmap_path)
                         except:
                             print(f"Could not load lightmap texture: {lightmap_path}")
@@ -148,7 +157,7 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
             mesh_parent.parent = obj_parent
 
         for submesh in range(rmesh.mesh_count):
-            mat_name = rmesh.submeshes[submesh].textures[1].texture_name.value.split(".")[0]
+            mat_name = rmesh.submeshes[submesh].texture.texture_name.value.split(".")[0]
             mesh = bpy.data.meshes.new("sm" + str(submesh) + "_" + mat_name)
             bm = bmesh.new()
 
@@ -220,7 +229,7 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
 
 class ImportRMeshPanel(bpy.types.Panel):
     bl_label = "RMesh Import"
-    bl_idname = "PT_RMeshImporter"
+    bl_idname = "_PT_RMeshImporter"
     bl_space_type = 'FILE_BROWSER'
     bl_region_type = 'UI'
     bl_category = 'Import'
