@@ -11,7 +11,7 @@ The addon requires the `kaitaistruct` Python package. To install it:
 2. Locate the Python executable at `python/bin/python.exe` (Windows) or equivalent path on your system
 3. On Windows: Open Command Prompt and run:
   ```cmd
-  "C:\Program Files\Blender Foundation\Blender [version]\[version]\python\bin\python.exe" -m pip install kaitaistruct
+  "/path/to/blender/python/bin/python.exe" -m pip install kaitaistruct
   ```
 
 ### Step 2: Install the Addon
