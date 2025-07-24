@@ -2,7 +2,7 @@ bl_info = {
 	"name": "Rmesh Importer",
 	"description": "Imports SCP:CB rmesh files",
 	"author": "señorDane",
-	"version": (0,0,4),
+	"version": (0,0,5),
 	"blender": (3,0,0),
 	"location": "File > Import > RMESH",
 	"category": "Import"
@@ -56,32 +56,89 @@ class ImportRMeshOperator(bpy.types.Operator, ImportHelper):
         #Creating mats first
         if (self.use_imp_mats):
             for submesh in range(rmesh.mesh_count):
-                mat_name = rmesh.submeshes[submesh].textures[1].texture_name.value.split(".")[0]
-                mat_pat = os.path.join(Path(filepath).parent, rmesh.submeshes[submesh].textures[1].texture_name.value)
+                tex0 = rmesh.submeshes[submesh].textures[0]
+                tex1 = rmesh.submeshes[submesh].textures[1]
+
+                print(f"Texture type [0] {tex0.mat_type}, Texture type [1] {tex1.mat_type}")
+                print(f"Diffuse texture: {tex1.texture_name.value}, Lightmap texture: {tex0.texture_name.value if tex0.mat_type == room_mesh.RoomMesh.TextureType.lightmap else 'None'}")
+
+
+                diffuse_name = Path(tex1.texture_name.value).stem
+                lightmap_name = f"_{Path(tex0.texture_name.value).stem}" if tex0.mat_type.name == room_mesh.RoomMesh.TextureType.lightmap else ""
+                mat_name = f"{diffuse_name}{lightmap_name}"
 
                 if mat_name not in mats:
                     mat = bpy.data.materials.new(name=mat_name)
-                    # obj.data.materials.append(mat)
                     mats[mat_name] = mat
-                    # Set the material to use the Principled BSDF shader
                     mat.use_nodes = True
                     nodes = mat.node_tree.nodes
-                    principled_bsdf = nodes.get("Principled BSDF")
-                    if principled_bsdf is None:
-                        principled_bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
-                    material_output = nodes.get("Material Output")
-                    if material_output is None:
-                        material_output = nodes.new(type="ShaderNodeOutputMaterial")
                     links = mat.node_tree.links
-                    links.new(principled_bsdf.outputs["BSDF"], material_output.inputs["Surface"])
+                    nodes.clear()
 
-                    print("Loading texture at path: " + mat_pat)
-                    image = bpy.data.images.load(mat_pat)
-                    texture = bpy.data.textures.new(name=mat_name, type='IMAGE')
-                    texture.image = image
-                    texture_node = nodes.new(type="ShaderNodeTexImage")
-                    texture_node.image = image
-                    links.new(texture_node.outputs["Color"], principled_bsdf.inputs["Base Color"])
+                    # Core nodes
+                    tex_image_diffuse = nodes.new(type="ShaderNodeTexImage")
+                    tex_image_diffuse.label = "Diffuse"
+                    tex_image_diffuse.name = "DiffuseTexture"
+                    tex_image_diffuse.location = (-600, 300)
+
+                    try:
+                        diffuse_path = os.path.join(Path(filepath).parent, tex1.texture_name.value)
+                        tex_image_diffuse.image = bpy.data.images.load(diffuse_path)
+                    except:
+                        print(f"Could not load diffuse texture: {diffuse_path}")
+
+                    # UV map for diffuse (default is uv1)
+                    uv_map_diffuse = nodes.new(type="ShaderNodeUVMap")
+                    uv_map_diffuse.uv_map = "uv1"
+                    uv_map_diffuse.location = (-800, 300)
+                    links.new(uv_map_diffuse.outputs["UV"], tex_image_diffuse.inputs["Vector"])
+
+                    # Setup Principled BSDF and output
+                    bsdf = nodes.new(type="ShaderNodeBsdfPrincipled")
+                    bsdf.location = (0, 0)
+
+                    output = nodes.new(type="ShaderNodeOutputMaterial")
+                    output.location = (200, 0)
+                    links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
+                    bsdf.inputs["Base Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+
+                    # Emission strength
+                    bsdf.inputs["Emission Strength"].default_value = 10.0
+
+                    if tex0.mat_type == room_mesh.RoomMesh.TextureType.lightmap:
+                        # Load and connect lightmap
+                        tex_image_lightmap = nodes.new(type="ShaderNodeTexImage")
+                        tex_image_lightmap.label = "Lightmap"
+                        tex_image_lightmap.name = "LightmapTexture"
+                        tex_image_lightmap.location = (-600, 0)
+
+                        try:
+                            lightmap_path = os.path.join(Path(filepath).parent, tex0.texture_name.value)
+                            tex_image_lightmap.image = bpy.data.images.load(lightmap_path)
+                        except:
+                            print(f"Could not load lightmap texture: {lightmap_path}")
+                            continue
+
+                        # UV2 map
+                        uv_map_lightmap = nodes.new(type="ShaderNodeUVMap")
+                        uv_map_lightmap.uv_map = "uv2"
+                        uv_map_lightmap.location = (-800, 0)
+                        links.new(uv_map_lightmap.outputs["UV"], tex_image_lightmap.inputs["Vector"])
+
+                        # Multiply node
+                        mix = nodes.new(type="ShaderNodeMixRGB")
+                        mix.blend_type = 'MULTIPLY'
+                        mix.inputs[0].default_value = 1.0  # Use full lightmap
+                        mix.location = (-300, 200)
+
+                        links.new(tex_image_diffuse.outputs["Color"], mix.inputs[1])
+                        links.new(tex_image_lightmap.outputs["Color"], mix.inputs[2])
+
+                        # Output to emission
+                        links.new(mix.outputs["Color"], bsdf.inputs["Emission Color"])
+                    else:
+                        # No lightmap — use only diffuse
+                        links.new(tex_image_diffuse.outputs["Color"], bsdf.inputs["Base Color"])
 
 
         obj_parent = object_utils.object_data_add(context, None, name=Path(filepath).stem)
